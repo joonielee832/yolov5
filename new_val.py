@@ -49,8 +49,12 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 def validate(hyp, opt, device, callbacks):
-    save_dir, batch_size, weights, data, cfg, workers = \
+    save_dir, batch_size, weights, data, workers = \
         Path(opt.save_dir), opt.batch_size, opt.weights, opt.data, opt.workers
+
+    # Directories
+    w = save_dir
+    w.mkdir(parents=True, exist_ok=True)  # make dir
 
     # Hyperparameters
     if isinstance(hyp, str):
@@ -66,6 +70,7 @@ def validate(hyp, opt, device, callbacks):
 
     # Loggers
     data_dict = None
+    opt.evolve = False
     if RANK in [-1, 0]:
         loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
 
@@ -92,7 +97,7 @@ def validate(hyp, opt, device, callbacks):
     with torch_distributed_zero_first(LOCAL_RANK):
         weights = attempt_download(weights)  # download if not found locally
     ckpt = torch.load(weights, map_location=device)  # load checkpoint
-    model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+    model = Model(ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     exclude = ['anchor'] if hyp.get('anchors') else []  # exclude keys
     csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
     csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
@@ -126,17 +131,20 @@ def validate(hyp, opt, device, callbacks):
                        'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
         model = torch.nn.DataParallel(model)
 
+    # Trainloader
+    train_loader, dataset = create_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls=False,
+                                              hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=LOCAL_RANK,
+                                              workers=workers, image_weights=opt.image_weights, quad=opt.quad,
+                                              prefix=colorstr('train: '), shuffle=True)
     # Process 0
     if RANK in [-1, 0]:
-        val_loader, dataset = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE * 2, gs, single_cls=False,
+        val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE * 2, gs, single_cls=False,
                                                 hyp=hyp, cache=opt.cache, rect=opt.rect, rank=-1,
                                                 workers=workers, pad=0.5,
                                                 prefix=colorstr('val: '))[0]
-
         labels = np.concatenate(dataset.labels, 0)
         if plots:
             plot_labels(labels, names, save_dir)
-
         # Anchors
         # TODO: Add noautoanchor to parser
         if not opt.noautoanchor:
@@ -161,12 +169,11 @@ def validate(hyp, opt, device, callbacks):
     compute_loss = ComputeLoss(model)  # init loss class
 
     if RANK in [-1, 0]:
-        strip_optimizer(model)  # strip optimizers
         LOGGER.info(f'\nValidating {model}...')
         results, _, _ = val.run(data_dict,
                                 batch_size=batch_size // WORLD_SIZE * 2,
                                 imgsz=imgsz,
-                                model=model.half().float(),
+                                model=model,
                                 iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
                                 single_cls=False,
                                 dataloader=val_loader,
