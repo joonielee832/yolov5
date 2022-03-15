@@ -88,7 +88,7 @@ def validate(hyp, opt, device, callbacks):
     nc = int(data_dict['nc'])  # number of classes
     names = data_dict['names']  # class names
     assert len(names) == nc, f'{len(names)} names found for nc={nc} dataset in {data}'  # check
-    is_coco = isinstance(val_path, str) and val_path.endswith('coco/val2017.txt')  # COCO dataset
+    is_coco = True
 
     # Model
     check_suffix(weights, '.pt')  # check weights
@@ -139,9 +139,9 @@ def validate(hyp, opt, device, callbacks):
     # Process 0
     if RANK in [-1, 0]:
         val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE * 2, gs, single_cls=False,
-                                                hyp=hyp, cache=opt.cache, rect=opt.rect, rank=-1,
-                                                workers=workers, pad=0.5,
-                                                prefix=colorstr('val: '))[0]
+                                       hyp=hyp, cache=opt.cache, rect=opt.rect, rank=-1,
+                                       workers=workers, pad=0.5,
+                                       prefix=colorstr('val: '))[0]
         labels = np.concatenate(dataset.labels, 0)
         if plots:
             plot_labels(labels, names, save_dir)
