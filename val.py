@@ -18,15 +18,6 @@ Usage - formats:
                                       yolov5s_edgetpu.tflite     # TensorFlow Edge TPU
 """
 
-from utils.torch_utils import select_device, time_sync
-from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.metrics import ConfusionMatrix, ap_per_class
-from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
-                           coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
-                           scale_coords, xywh2xyxy, xyxy2xywh)
-from utils.datasets import create_dataloader
-from utils.callbacks import Callbacks
-from models.common import DetectMultiBackend
 import argparse
 import json
 import os
@@ -43,6 +34,16 @@ ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+
+from models.common import DetectMultiBackend
+from utils.callbacks import Callbacks
+from utils.datasets import create_dataloader
+from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
+                           coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
+                           scale_coords, xywh2xyxy, xyxy2xywh)
+from utils.metrics import ConfusionMatrix, ap_per_class
+from utils.plots import output_to_target, plot_images, plot_val_study
+from utils.torch_utils import select_device, time_sync
 
 
 def save_one_txt(predn, save_conf, shape, file):
@@ -124,7 +125,6 @@ def run(data,
     training = model is not None
     if training:  # called by train.py
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
-        print(f"Device type in validation is: {device.type}")
         half &= device.type != 'cpu'  # half precision only supported on CUDA
         model.half() if half else model.float()
     else:  # called directly
@@ -135,14 +135,14 @@ def run(data,
         (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
         # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half).half()
-        stride, pt, jit, engine = model.stride, True, False, False
+        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+        stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
+        half = model.fp16  # FP16 supported on limited backends with CUDA
         if engine:
             batch_size = model.batch_size
         else:
             device = model.device
-            print(f"Device type in validation is: {device.type}")
             if not (pt or jit):
                 batch_size = 1  # export.py models default to batch-size 1
                 LOGGER.info(f'Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models')
@@ -160,9 +160,9 @@ def run(data,
 
     # Dataloader
     if not training:
-        # model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, int(imgsz * (16 / 9))))  # warmup
-        pad = 0.0
-        rect = True
+        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
+        pad = 0.0 if task in ('speed', 'benchmark') else 0.5
+        rect = False if task == 'benchmark' else pt  # square inference for benchmarks
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader(data[task], imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
                                        workers=workers, prefix=colorstr(f'{task}: '))[0]
